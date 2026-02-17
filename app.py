@@ -33,8 +33,6 @@ ACTION_LABELS = {
     "5": "Something else"
 }
 
-sent_menu_to = set()
-
 
 def save_to_sheets(phone, action_number, action_label, raw_message):
     try:
@@ -69,8 +67,6 @@ def save_to_sheets(phone, action_number, action_label, raw_message):
         print("✓ Spreadsheet opened")
 
         sheet = spreadsheet.sheet1
-        print("✓ Sheet1 accessed")
-
         existing = sheet.get_all_values()
         if not existing:
             sheet.append_row(["Timestamp", "Phone Number", "Action #", "Action Label", "Raw Message"])
@@ -84,17 +80,17 @@ def save_to_sheets(phone, action_number, action_label, raw_message):
             raw_message
         ]
         sheet.append_row(row)
-        print(f"✓ Row saved successfully: {row}")
+        print(f"✓ Row saved: {row}")
         print("=== SHEETS DEBUG END ===")
         return True
 
     except json.JSONDecodeError as e:
-        print(f"ERROR: Could not parse GOOGLE_CREDENTIALS_JSON - {e}")
+        print(f"ERROR: JSON parse failed - {e}")
     except gspread.exceptions.APIError as e:
-        print(f"ERROR: Google Sheets API error - {e}")
-        print("HINT: Enable Google Sheets API and Google Drive API in Google Cloud Console")
+        print(f"ERROR: Sheets API error - {e}")
+        print("HINT: Enable Google Sheets API + Google Drive API in Google Cloud Console")
     except gspread.exceptions.SpreadsheetNotFound:
-        print("ERROR: Spreadsheet not found! Check SPREADSHEET_ID and sharing settings")
+        print("ERROR: Spreadsheet not found - check SPREADSHEET_ID and sharing")
     except Exception as e:
         print(f"ERROR: {type(e).__name__}: {e}")
 
@@ -132,45 +128,48 @@ def verify_webhook():
 @app.route("/webhook", methods=["POST"])
 def handle_message():
     data = request.get_json()
-    print(f"Incoming: {json.dumps(data)}")
+    print(f"RAW INCOMING: {json.dumps(data)}")
 
     try:
         entry = data["entry"][0]
         changes = entry["changes"][0]
         value = changes["value"]
 
-        if "statuses" in value:
+        # Skip delivery/read status updates
+        if "statuses" in value and "messages" not in value:
+            print("Skipping status update")
             return jsonify({"status": "ok"}), 200
 
         messages = value.get("messages", [])
         if not messages:
+            print("No messages in payload")
             return jsonify({"status": "ok"}), 200
 
         message = messages[0]
         sender_phone = message["from"]
         msg_type = message.get("type", "")
+        print(f"Message type: {msg_type} from {sender_phone}")
 
         if msg_type != "text":
             send_whatsapp_message(sender_phone, "Please send a text message 😊")
             return jsonify({"status": "ok"}), 200
 
         incoming_text = message["text"]["body"].strip()
-        print(f"Message from {sender_phone}: '{incoming_text}'")
+        print(f"Text received: '{incoming_text}'")
 
-        if sender_phone not in sent_menu_to:
-            sent_menu_to.add(sender_phone)
-            send_whatsapp_message(sender_phone, ACTION_MENU)
-
-        elif incoming_text in ACTION_LABELS:
+        # If they sent a valid action number → save and confirm
+        if incoming_text in ACTION_LABELS:
             action_label = ACTION_LABELS[incoming_text]
+            print(f"Valid action: {incoming_text} = {action_label}")
             save_to_sheets(sender_phone, incoming_text, action_label, incoming_text)
             send_whatsapp_message(sender_phone, f"✅ Got it! You selected: *{action_label}*\n\nWe'll get back to you shortly!")
-
         else:
-            send_whatsapp_message(sender_phone, "Please reply with a number between 1 and 5.\n\n" + ACTION_MENU)
+            # Any other message → send the menu
+            print("Sending action menu")
+            send_whatsapp_message(sender_phone, ACTION_MENU)
 
     except Exception as e:
-        print(f"Error: {type(e).__name__}: {e}")
+        print(f"EXCEPTION in handle_message: {type(e).__name__}: {e}")
 
     return jsonify({"status": "ok"}), 200
 
